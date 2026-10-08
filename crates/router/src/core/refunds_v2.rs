@@ -1180,10 +1180,16 @@ pub async fn validate_and_create_refund(
         .attach_printable("Transaction in invalid. Missing field \"connector_transaction_id\" in payment_attempt.")
     })?;
 
+    // See the comment in `crates/router/src/core/refunds.rs`: `refund.connector_transaction_id`
+    // stores the hashed form for processor identifiers longer than 128 characters, so the
+    // refund history has to be looked up by that stored form and not by the raw identifier.
+    let (stored_connector_payment_id, _) =
+        common_utils_types::ConnectorTransactionId::form_id_and_data(connector_payment_id.clone());
+
     let all_refunds = db
         .find_refund_by_processor_merchant_id_connector_transaction_id(
             platform.get_processor().get_account().get_id(),
-            &connector_payment_id,
+            stored_connector_payment_id.get_id(),
             platform.get_processor().get_account().storage_scheme,
         )
         .await

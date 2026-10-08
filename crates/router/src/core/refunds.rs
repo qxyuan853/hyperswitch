@@ -1670,7 +1670,7 @@ pub async fn validate_and_create_refund(
         .attach_printable("invalid merchant_id in request"))
     })?;
 
-    let connector_transaction_id = payment_attempt
+    let raw_connector_transaction_id = payment_attempt
         .clone()
         .connector_transaction_id.ok_or_else(|| {
             report!(errors::ApiErrorResponse::InternalServerError).attach_printable(
@@ -1678,10 +1678,19 @@ pub async fn validate_and_create_refund(
             )
         })?;
 
+    // `refund.connector_transaction_id` holds the *hashed* form of a processor identifier
+    // longer than 128 characters (the raw value is kept in
+    // `refund.processor_transaction_data`), so the refund history has to be looked up by the
+    // stored form. Querying by the raw identifier returns no rows at all for such a payment
+    // and silently defeats both guards that are derived from `all_refunds`:
+    // `validate_refund_amount` and `validate_maximum_refund_against_payment_attempt`.
+    let (connector_transaction_id, processor_transaction_data) =
+        ConnectorTransactionId::form_id_and_data(raw_connector_transaction_id);
+
     let all_refunds = db
         .find_refund_by_processor_merchant_id_connector_transaction_id(
             platform.get_processor().get_account().get_id(),
-            &connector_transaction_id,
+            connector_transaction_id.get_id(),
             platform.get_processor().get_account().storage_scheme,
         )
         .await
@@ -1737,8 +1746,6 @@ pub async fn validate_and_create_refund(
         connector_enum.connector_name,
     )?;
 
-    let (connector_transaction_id, processor_transaction_data) =
-        ConnectorTransactionId::form_id_and_data(connector_transaction_id);
     let refund_create_req = diesel_refund::RefundNew {
         refund_id: refund_id.to_string(),
         internal_reference_id: utils::generate_id(consts::ID_LENGTH, "refid"),
